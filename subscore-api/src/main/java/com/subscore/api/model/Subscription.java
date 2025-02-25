@@ -99,6 +99,13 @@ public class Subscription {
         return notificationEnabled;
     }
 
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
     public void setId(UUID id) {
         this.id = id;
     }

@@ -1,16 +1,17 @@
 package com.subscore.api.controller;
 
+import com.subscore.api.dto.SubscriptionDTO;
 import com.subscore.api.model.Subscription;
 import com.subscore.api.service.SubscriptionService;
+import com.subscore.api.service.UserService;
+import com.subscore.api.utils.SecurityUtils;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.util.UriComponentsBuilder;
 
-import java.net.URI;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -37,10 +38,12 @@ import java.util.UUID;
 public class SubscriptionController {
 
     private final SubscriptionService subscriptionService;
+    private final UserService userService;
 
     @Autowired
-    public SubscriptionController(SubscriptionService subscriptionService) {
+    public SubscriptionController(SubscriptionService subscriptionService, UserService userService) {
         this.subscriptionService = subscriptionService;
+        this.userService = userService;
     }
 
     /**
@@ -64,73 +67,94 @@ public class SubscriptionController {
     /**
      * 新規サブスクリプション情報を登録するAPIエンドポイント
      *
-     * <p>リクエストボディで受け取ったサブスクリプション情報を登録します。
-     * 登録成功時は、作成されたリソースのURLをLocationヘッダーに含めて返却します。
-     *
      * @param subscription 登録するサブスクリプション情報
-     * @param uriBuilder URIビルダー
      * @return ResponseEntity<Subscription> 登録したサブスクリプション情報
      *          - 201 Created：登録が成功した場合
-     * @throws IllegalArgumentException subscriptionがnullの場合
      */
     @PostMapping
-    public ResponseEntity<Subscription> addSubscription(
-            @Valid @RequestBody Subscription subscription,
-            UriComponentsBuilder uriBuilder) {
+    public ResponseEntity<Subscription> addSubscription(@Valid @RequestBody Subscription subscription) {
+        String email = SecurityUtils.getCurrentUserEmail();
+        UUID userId = userService.getUserIdByEmail(email);
 
-        Subscription savedSubscription = subscriptionService.addSubscription(subscription);
-        URI location = uriBuilder.path("/api/subscriptions/{id}")
-                .buildAndExpand(savedSubscription.getId())
-                .toUri();
+        // 不正な値をクリア
+        subscription.setId(null);  // 新規作成なのでIDはnull
+        subscription.setUserId(userId);  // ユーザーIDを設定
+        subscription.setCreatedAt(null);  // 自動設定されるのでnull
+        subscription.setUpdatedAt(null);  // 自動設定されるのでnull
 
-        return ResponseEntity
-                .created(location)
-                .body(savedSubscription);
+        LocalDate nextPaymentDate = calculateNextPaymentDate(
+                subscription.getPaymentDate(),
+                subscription.getBillingCycle()
+        );
+        subscription.setNextPaymentDate(nextPaymentDate);
+
+        return ResponseEntity.ok(subscriptionService.addSubscription(subscription));
     }
 
     /**
      * 指定されたIDのサブスクリプション情報を更新するAPIエンドポイント
      *
-     * @param id 更新対象のサブスクリプションID
+     * @param subscriptionId 更新対象のサブスクリプションID
      * @param subscription 更新後のサブスクリプション情報
      * @return ResponseEntity<Subscription> 更新後のサブスクリプション情報
      *          - 200 OK：更新が成功した場合
      *          - 404 Not Found：指定されたIDが存在しなかった場合
      * @throws IllegalArgumentException idまたはsubscriptionがnullの場合
      */
-    @PutMapping("/{id}")
+    @PutMapping("/{subscriptionId}")
     public ResponseEntity<Subscription> updateSubscriptionById(
-            @PathVariable UUID id,
+            @PathVariable UUID subscriptionId,
             @Valid @RequestBody Subscription subscription) {
-
-        return ResponseEntity.ok(subscriptionService.updateSubscriptionById(id, subscription));
+        return ResponseEntity.ok(subscriptionService.updateSubscriptionById(subscriptionId, subscription));
     }
 
     /**
      * 指定されたIDのサブスクリプション情報を削除するAPIエンドポイント
      *
-     * @param id 削除対象のサブスクリプションID
+     * @param subscriptionId 削除対象のサブスクリプションID
      * @return ResponseEntity<Void>
      *         - 204 No Content: 削除が成功した場合
      *         - 404 Not Found: 指定されたIDのサブスクリプションが存在しない場合
      */
-    @DeleteMapping("/{id}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public ResponseEntity<Void> deleteSubscriptionById(@PathVariable UUID id) {
-        subscriptionService.deleteSubscriptionById(id);
+    @DeleteMapping("/{subscriptionId}")
+    public ResponseEntity<Void> deleteSubscriptionById(@PathVariable UUID subscriptionId) {
+        subscriptionService.deleteSubscriptionById(subscriptionId);
         return ResponseEntity.noContent().build();
     }
 
     /**
-     * 指定されたユーザーIDに紐づくサブスクリプション情報を取得するAPIエンドポイント
+     * ログインユーザーIDに紐づくサブスクリプション情報を取得するAPIエンドポイント
      *
-     * @param userId 取得対象のユーザーID
      * @return ResponseEntity<List<Subscription>> ユーザーのサブスクリプション情報のリスト
      *         - 200 OK: 正常に取得できた場合
      *         - 404 Not Found: 指定されたユーザーIDのサブスクリプションが存在しない場合
      */
-    @GetMapping("/user/{userId}")
-    public ResponseEntity<List<Subscription>> getSubscriptionByUserId(@PathVariable UUID userId) {
-        return ResponseEntity.ok(subscriptionService.getSubscriptionByUserId(userId));
+    @GetMapping("/user")
+    public ResponseEntity<List<SubscriptionDTO>> getSubscriptionByUserId() {
+        String email = SecurityUtils.getCurrentUserEmail();
+        UUID userId = userService.getUserIdByEmail(email);
+        return  ResponseEntity.ok(subscriptionService.getSubscriptionByUserId(userId));
+    }
+
+
+    private LocalDate calculateNextPaymentDate(int paymentDate, String billingCycle) {
+        LocalDate today = LocalDate.now();
+        LocalDate nextPayment;
+
+        // 支払日を基に次回支払日を計算
+        if (paymentDate < today.getDayOfMonth()) {
+            // 今月の支払日を過ぎている場合は来月
+            nextPayment = today.plusMonths(1).withDayOfMonth(paymentDate);
+        } else {
+            // まだ今月の支払日が来ていない場合は今月
+            nextPayment = today.withDayOfMonth(paymentDate);
+        }
+
+        // 年額の場合は1年後に設定
+        if ("yearly".equals(billingCycle)) {
+            nextPayment = nextPayment.plusYears(1);
+        }
+
+        return nextPayment;
     }
 }

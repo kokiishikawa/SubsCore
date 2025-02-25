@@ -14,7 +14,7 @@ public class Category {
     @Id
     @Column(length = 36)
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private String id;
+    private UUID id;
 
     @Column(nullable = false, unique = true, length = 100)
     private String name;
@@ -36,11 +36,19 @@ public class Category {
         updatedAt = LocalDateTime.now();
     }
 
-    public String getId() {
+    public UUID getId() {
         return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
     }
 
     public String getName() {
         return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
     }
 }
